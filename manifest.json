@@ -1,0 +1,11 @@
+{
+  "domain": "adminislocuinte",
+  "name": "Adminis Locuințe",
+  "codeowners": ["@emanuelbesliu"],
+  "config_flow": true,
+  "documentation": "https://github.com/emanuelbesliu/homeassistant-adminislocuinte",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "requirements": ["aiohttp>=3.8.0"],
+  "version": "1.0.0"
+}

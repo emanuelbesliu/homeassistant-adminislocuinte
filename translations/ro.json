@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configurează Adminis Locuințe",
+        "description": "Introdu datele de autentificare pentru contul tău Adminis Locuințe",
+        "data": {
+          "username": "Adresă de e-mail",
+          "password": "Parolă"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Date de autentificare invalide",
+      "unknown": "Eroare neașteptată"
+    },
+    "abort": {
+      "already_configured": "Contul este deja configurat"
+    }
+  }
+}
