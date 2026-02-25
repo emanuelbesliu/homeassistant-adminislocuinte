@@ -345,7 +345,23 @@ class AdminisLocuinteLocationMonthlyBillSensor(AdminisLocuinteBaseSensor):
                                 _LOGGER.warning(f"Could not find amount for '{name}'. Available fields: {list(item.keys())}, Item: {item}")
                             
                             breakdown[name] = amount
+                            
+                            # Also add as individual attribute with normalized key name
+                            # Convert "Apa calda" -> "expense_apa_calda"
+                            # This creates separate attributes for each expense
+                            safe_name = name.lower()
+                            # Replace Romanian diacritics
+                            safe_name = safe_name.replace("ă", "a").replace("â", "a").replace("î", "i")
+                            safe_name = safe_name.replace("ș", "s").replace("ț", "t").replace("ş", "s").replace("ţ", "t")
+                            # Replace spaces and special chars with underscore
+                            safe_name = "".join(c if c.isalnum() or c == "_" else "_" for c in safe_name)
+                            # Remove multiple underscores
+                            safe_name = "_".join(filter(None, safe_name.split("_")))
+                            # Add prefix and store
+                            attr_key = f"expense_{safe_name}"
+                            attrs[attr_key] = amount
                         
+                        # Keep breakdown dict for backward compatibility
                         attrs["breakdown"] = breakdown
                         attrs["breakdown_count"] = len(results["values"])
                         attrs["debug_info"] = debug_info
@@ -472,7 +488,22 @@ class AdminisLocuinteLocationPendingSensor(AdminisLocuinteBaseSensor):
                                     _LOGGER.warning(f"Could not find amount for '{name}'. Available fields: {list(item.keys())}, Item: {item}")
                                 
                                 breakdown[name] = amount
+                                
+                                # Also add as individual attribute with normalized key name
+                                # Convert "Apa calda" -> "expense_apa_calda"
+                                safe_name = name.lower()
+                                # Replace Romanian diacritics
+                                safe_name = safe_name.replace("ă", "a").replace("â", "a").replace("î", "i")
+                                safe_name = safe_name.replace("ș", "s").replace("ț", "t").replace("ş", "s").replace("ţ", "t")
+                                # Replace spaces and special chars with underscore
+                                safe_name = "".join(c if c.isalnum() or c == "_" else "_" for c in safe_name)
+                                # Remove multiple underscores
+                                safe_name = "_".join(filter(None, safe_name.split("_")))
+                                # Add prefix and store
+                                attr_key = f"expense_{safe_name}"
+                                attrs[attr_key] = amount
                             
+                            # Keep breakdown dict for backward compatibility
                             attrs["breakdown"] = breakdown
                             attrs["breakdown_count"] = len(results["values"])
                             attrs["debug_info"] = debug_info
