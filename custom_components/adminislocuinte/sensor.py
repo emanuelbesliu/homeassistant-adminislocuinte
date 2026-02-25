@@ -354,7 +354,7 @@ class AdminisLocuinteLocationPendingSensor(AdminisLocuinteBaseSensor):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return additional attributes."""
+        """Return additional attributes with bill breakdown."""
         attrs = {}
         if self.coordinator.data and "locations" in self.coordinator.data:
             location_data = self.coordinator.data["locations"].get(self._location_id)
@@ -365,12 +365,30 @@ class AdminisLocuinteLocationPendingSensor(AdminisLocuinteBaseSensor):
                 attrs["location_name"] = info.get("name", "Unknown")
                 attrs["location_type"] = info.get("type", "unknown")
             
-            # Add pending payment details
+            # Add pending payment details and breakdown
             if location_data and "pending_payments" in location_data:
                 pending = location_data["pending_payments"]
                 if pending:
                     attrs["allow_payments"] = pending.get("allowPayments", False)
                     attrs["error_code"] = pending.get("error", 0)
+                    
+                    # Add detailed breakdown from results
+                    if pending.get("results"):
+                        results = pending["results"]
+                        attrs["month"] = results.get("month", "")
+                        attrs["year"] = results.get("year", "")
+                        attrs["owner"] = results.get("owner", "")
+                        attrs["total"] = results.get("totals", 0)
+                        
+                        # Add breakdown of expenses
+                        if results.get("values") and isinstance(results["values"], list):
+                            breakdown = {}
+                            for item in results["values"]:
+                                name = item.get("name", "Unknown")
+                                amount = item.get("total", 0)
+                                breakdown[name] = amount
+                            attrs["breakdown"] = breakdown
+                            attrs["breakdown_count"] = len(results["values"])
         return attrs
 
 
