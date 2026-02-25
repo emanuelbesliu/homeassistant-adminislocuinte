@@ -303,12 +303,54 @@ class AdminisLocuinteLocationMonthlyBillSensor(AdminisLocuinteBaseSensor):
                     # Add detailed breakdown from values array
                     if results.get("values") and isinstance(results["values"], list):
                         breakdown = {}
+                        # Debug: capture structure of first item
+                        debug_info = {}
+                        if len(results["values"]) > 0:
+                            first_item = results["values"][0]
+                            debug_info["first_item_type"] = str(type(first_item))
+                            if isinstance(first_item, dict):
+                                debug_info["available_keys"] = list(first_item.keys())
+                                debug_info["first_item_sample"] = {k: str(v)[:50] for k, v in first_item.items()}
+                            _LOGGER.info(f"Monthly bill values array debug: {debug_info}")
+                        
                         for item in results["values"]:
+                            if not isinstance(item, dict):
+                                _LOGGER.warning(f"Item in values array is not a dict: {type(item)}")
+                                continue
+                                
                             name = item.get("name", "Unknown")
-                            amount = item.get("total", 0)
+                            
+                            # Try to extract amount from various possible fields
+                            amount = 0
+                            amount_found = False
+                            
+                            # Try each possible field name
+                            for field in ["total", "value", "amount", "suma", "valoare"]:
+                                if field in item and item[field] is not None:
+                                    value = item[field]
+                                    try:
+                                        # Handle string values like "5.49 RON" or "5.49"
+                                        if isinstance(value, str):
+                                            # Remove currency symbols and whitespace
+                                            value = value.replace("RON", "").replace("Lei", "").strip()
+                                        amount = float(value)
+                                        amount_found = True
+                                        break
+                                    except (ValueError, TypeError) as e:
+                                        _LOGGER.debug(f"Failed to convert {field}={item[field]} to float: {e}")
+                                        continue
+                            
+                            # If still not found, log details (only first 2 items to avoid spam)
+                            if not amount_found and len(breakdown) < 2:
+                                _LOGGER.warning(f"Could not find amount for '{name}'. Available fields: {list(item.keys())}, Item: {item}")
+                            
                             breakdown[name] = amount
+                        
                         attrs["breakdown"] = breakdown
                         attrs["breakdown_count"] = len(results["values"])
+                        attrs["debug_info"] = debug_info
+                        # Add raw sample of first 2 items for manual inspection
+                        attrs["raw_values_sample"] = results["values"][:2] if len(results["values"]) > 0 else []
         return attrs
 
 
@@ -388,12 +430,54 @@ class AdminisLocuinteLocationPendingSensor(AdminisLocuinteBaseSensor):
                         # Add breakdown of expenses
                         if results.get("values") and isinstance(results["values"], list):
                             breakdown = {}
+                            # Debug: capture structure of first item
+                            debug_info = {}
+                            if len(results["values"]) > 0:
+                                first_item = results["values"][0]
+                                debug_info["first_item_type"] = str(type(first_item))
+                                if isinstance(first_item, dict):
+                                    debug_info["available_keys"] = list(first_item.keys())
+                                    debug_info["first_item_sample"] = {k: str(v)[:50] for k, v in first_item.items()}
+                                _LOGGER.info(f"Pending values array debug: {debug_info}")
+                            
                             for item in results["values"]:
+                                if not isinstance(item, dict):
+                                    _LOGGER.warning(f"Item in values array is not a dict: {type(item)}")
+                                    continue
+                                    
                                 name = item.get("name", "Unknown")
-                                amount = item.get("total", 0)
+                                
+                                # Try to extract amount from various possible fields
+                                amount = 0
+                                amount_found = False
+                                
+                                # Try each possible field name
+                                for field in ["total", "value", "amount", "suma", "valoare"]:
+                                    if field in item and item[field] is not None:
+                                        value = item[field]
+                                        try:
+                                            # Handle string values like "5.49 RON" or "5.49"
+                                            if isinstance(value, str):
+                                                # Remove currency symbols and whitespace
+                                                value = value.replace("RON", "").replace("Lei", "").strip()
+                                            amount = float(value)
+                                            amount_found = True
+                                            break
+                                        except (ValueError, TypeError) as e:
+                                            _LOGGER.debug(f"Failed to convert {field}={item[field]} to float: {e}")
+                                            continue
+                                
+                                # If still not found, log details (only first 2 items to avoid spam)
+                                if not amount_found and len(breakdown) < 2:
+                                    _LOGGER.warning(f"Could not find amount for '{name}'. Available fields: {list(item.keys())}, Item: {item}")
+                                
                                 breakdown[name] = amount
+                            
                             attrs["breakdown"] = breakdown
                             attrs["breakdown_count"] = len(results["values"])
+                            attrs["debug_info"] = debug_info
+                            # Add raw sample for debugging
+                            attrs["raw_values_sample"] = results["values"][:2] if len(results["values"]) > 0 else []
         return attrs
 
 
