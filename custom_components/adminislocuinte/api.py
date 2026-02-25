@@ -99,7 +99,8 @@ class AdminisLocuinteAPI:
     async def _extract_location_ids(self) -> list[str]:
         """Extract location IDs and details from the dashboard HTML.
         
-        Location IDs are embedded in the dashboard HTML as data-code attributes.
+        Location IDs are embedded in <option value="ID" data-code="CODE"> elements.
+        We need the value attribute (actual location ID), not the data-code.
         Also extracts location names and addresses.
         """
         try:
@@ -110,20 +111,21 @@ class AdminisLocuinteAPI:
                 if response.status == 200:
                     html = await response.text()
                     
-                    # Extract location IDs and names
-                    # Pattern: data-code="123456">Location Name</
-                    pattern = r'data-code="(\d+)"[^>]*>([^<]+)<'
+                    # Extract location IDs from <option value="ID" data-code="CODE">Location Name</option>
+                    # Pattern: <option value="16835" data-code="345764">Location Name</option>
+                    pattern = r'<option\s+value="(\d+)"\s+data-code="(\d+)"[^>]*>([^<]+)</option>'
                     matches = re.findall(pattern, html)
                     
                     location_ids = []
-                    for loc_id, loc_name in matches:
+                    for loc_id, code, loc_name in matches:
                         if loc_id not in location_ids:
                             location_ids.append(loc_id)
                             # Parse location name to extract details
                             # Format: "Str. Exemplu nr. 1, bloc A1, scara A, ap. 12, Iasi, Iasi"
                             self._location_info[loc_id] = {
                                 "name": loc_name.strip(),
-                                "id": loc_id
+                                "id": loc_id,
+                                "code": code  # Store the code as well for reference
                             }
                             
                             # Try to extract apartment/parking number
@@ -220,33 +222,13 @@ class AdminisLocuinteAPI:
                         results = pending_payments["results"]
                         location_pending = 0.0
                         
-                        # Parse owner pending amount
-                        if results.get("owner"):
-                            owner_data = results["owner"]
-                            if isinstance(owner_data, dict):
-                                # Try different possible keys for pending amount
-                                for key in ["amount", "total", "pending", "value", "suma"]:
-                                    if key in owner_data and owner_data[key] is not None:
-                                        try:
-                                            location_pending += float(owner_data[key])
-                                            _LOGGER.debug(f"Location {location_id} owner pending: {owner_data[key]}")
-                                            break
-                                        except (ValueError, TypeError):
-                                            pass
-                        
-                        # Parse association pending amount
-                        if results.get("assoc"):
-                            assoc_data = results["assoc"]
-                            if isinstance(assoc_data, dict):
-                                # Try different possible keys for pending amount
-                                for key in ["amount", "total", "pending", "value", "suma"]:
-                                    if key in assoc_data and assoc_data[key] is not None:
-                                        try:
-                                            location_pending += float(assoc_data[key])
-                                            _LOGGER.debug(f"Location {location_id} assoc pending: {assoc_data[key]}")
-                                            break
-                                        except (ValueError, TypeError):
-                                            pass
+                        # The pending amount is in results.totalsNoviprop field
+                        if results.get("totalsNoviprop"):
+                            try:
+                                location_pending = float(results["totalsNoviprop"])
+                                _LOGGER.debug(f"Location {location_id} pending from totalsNoviprop: {location_pending} RON")
+                            except (ValueError, TypeError) as e:
+                                _LOGGER.warning(f"Failed to parse totalsNoviprop for location {location_id}: {e}")
                         
                         # Add to total if we found any pending amount
                         if location_pending > 0:

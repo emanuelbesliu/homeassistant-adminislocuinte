@@ -338,35 +338,16 @@ class AdminisLocuinteLocationPendingSensor(AdminisLocuinteBaseSensor):
             if location_data and "pending_payments" in location_data:
                 pending = location_data["pending_payments"]
                 if pending and pending.get("results"):
-                    # Calculate total pending from owner and association
+                    # Calculate total pending from totalsNoviprop field
                     results = pending["results"]
                     total = 0.0
                     
-                    # Parse owner pending amount
-                    if results.get("owner"):
-                        owner_data = results["owner"]
-                        if isinstance(owner_data, dict):
-                            # Try different possible keys for pending amount
-                            for key in ["amount", "total", "pending", "value", "suma"]:
-                                if key in owner_data and owner_data[key] is not None:
-                                    try:
-                                        total += float(owner_data[key])
-                                        break
-                                    except (ValueError, TypeError):
-                                        pass
-                    
-                    # Parse association pending amount
-                    if results.get("assoc"):
-                        assoc_data = results["assoc"]
-                        if isinstance(assoc_data, dict):
-                            # Try different possible keys for pending amount
-                            for key in ["amount", "total", "pending", "value", "suma"]:
-                                if key in assoc_data and assoc_data[key] is not None:
-                                    try:
-                                        total += float(assoc_data[key])
-                                        break
-                                    except (ValueError, TypeError):
-                                        pass
+                    # The pending amount is in results.totalsNoviprop field
+                    if results.get("totalsNoviprop"):
+                        try:
+                            total = float(results["totalsNoviprop"])
+                        except (ValueError, TypeError):
+                            pass
                     
                     return total
         return 0.0  # Default to 0 when no pending
