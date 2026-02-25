@@ -236,7 +236,7 @@ class AdminisLocuinteLastPaymentDateSensor(AdminisLocuinteBaseSensor):
 
 
 class AdminisLocuinteLocationMonthlyBillSensor(AdminisLocuinteBaseSensor):
-    """Sensor for monthly bill of a specific location."""
+    """Sensor for current monthly bill (pending) of a specific location."""
 
     def __init__(
         self,
@@ -260,23 +260,24 @@ class AdminisLocuinteLocationMonthlyBillSensor(AdminisLocuinteBaseSensor):
 
     @property
     def native_value(self) -> float | None:
-        """Return the state of the sensor."""
+        """Return the state of the sensor (current month's total)."""
         if self.coordinator.data and "locations" in self.coordinator.data:
             location_data = self.coordinator.data["locations"].get(self._location_id)
-            if location_data and "payment_history" in location_data:
-                history = location_data["payment_history"]
-                if history and history.get("results") and len(history["results"]) > 0:
-                    latest = history["results"][0]
-                    amount_str = latest.get("amount", "0")
-                    try:
-                        return float(amount_str)
-                    except (ValueError, TypeError):
-                        return None
-        return None
+            if location_data and "pending_payments" in location_data:
+                pending = location_data["pending_payments"]
+                if pending and pending.get("results"):
+                    results = pending["results"]
+                    # Use totalsNoviprop for the current pending amount
+                    if results.get("totalsNoviprop"):
+                        try:
+                            return float(results["totalsNoviprop"])
+                        except (ValueError, TypeError):
+                            pass
+        return 0.0
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return additional attributes with bill breakdown."""
+        """Return additional attributes with current month's bill breakdown."""
         attrs = {}
         if self.coordinator.data and "locations" in self.coordinator.data:
             location_data = self.coordinator.data["locations"].get(self._location_id)
@@ -288,22 +289,26 @@ class AdminisLocuinteLocationMonthlyBillSensor(AdminisLocuinteBaseSensor):
                 attrs["location_type"] = info.get("type", "unknown")
                 attrs["apartment"] = info.get("apartment", "N/A")
             
-            # Add latest bill details
-            if location_data and "payment_history" in location_data:
-                history = location_data["payment_history"]
-                if history and history.get("results") and len(history["results"]) > 0:
-                    latest = history["results"][0]
-                    attrs["date"] = latest.get("date", "")
-                    attrs["receipt"] = latest.get("receipt", "")
+            # Add current month's bill details from pending_payments
+            if location_data and "pending_payments" in location_data:
+                pending = location_data["pending_payments"]
+                if pending and pending.get("results"):
+                    results = pending["results"]
+                    attrs["month"] = results.get("month", "")
+                    attrs["year"] = results.get("year", "")
+                    attrs["owner"] = results.get("owner", "")
+                    attrs["total"] = results.get("totals", 0)
+                    attrs["allow_payments"] = pending.get("allowPayments", False)
                     
-                    # Add breakdown
-                    if latest.get("details"):
+                    # Add detailed breakdown from values array
+                    if results.get("values") and isinstance(results["values"], list):
                         breakdown = {}
-                        for detail in latest["details"]:
-                            name = detail.get("name", "Unknown")
-                            amount = detail.get("amount", 0)
+                        for item in results["values"]:
+                            name = item.get("name", "Unknown")
+                            amount = item.get("total", 0)
                             breakdown[name] = amount
                         attrs["breakdown"] = breakdown
+                        attrs["breakdown_count"] = len(results["values"])
         return attrs
 
 
