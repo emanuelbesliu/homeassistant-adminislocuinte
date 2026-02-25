@@ -216,12 +216,43 @@ class AdminisLocuinteAPI:
                     location_data["pending_payments"] = pending_payments
                     
                     # Extract pending amount if available
-                    # Note: Current API returns null for all values, but structure is prepared
-                    if pending_payments.get("results"):
+                    if pending_payments and pending_payments.get("results"):
                         results = pending_payments["results"]
-                        if results.get("owner") or results.get("assoc"):
-                            # TODO: Calculate actual pending amount when data is available
-                            pass
+                        location_pending = 0.0
+                        
+                        # Parse owner pending amount
+                        if results.get("owner"):
+                            owner_data = results["owner"]
+                            if isinstance(owner_data, dict):
+                                # Try different possible keys for pending amount
+                                for key in ["amount", "total", "pending", "value", "suma"]:
+                                    if key in owner_data and owner_data[key] is not None:
+                                        try:
+                                            location_pending += float(owner_data[key])
+                                            _LOGGER.debug(f"Location {location_id} owner pending: {owner_data[key]}")
+                                            break
+                                        except (ValueError, TypeError):
+                                            pass
+                        
+                        # Parse association pending amount
+                        if results.get("assoc"):
+                            assoc_data = results["assoc"]
+                            if isinstance(assoc_data, dict):
+                                # Try different possible keys for pending amount
+                                for key in ["amount", "total", "pending", "value", "suma"]:
+                                    if key in assoc_data and assoc_data[key] is not None:
+                                        try:
+                                            location_pending += float(assoc_data[key])
+                                            _LOGGER.debug(f"Location {location_id} assoc pending: {assoc_data[key]}")
+                                            break
+                                        except (ValueError, TypeError):
+                                            pass
+                        
+                        # Add to total if we found any pending amount
+                        if location_pending > 0:
+                            total_pending += location_pending
+                            _LOGGER.info(f"Location {location_id} has pending: {location_pending} RON")
+                        
                 except Exception as err:
                     _LOGGER.error(f"Error fetching pending payments for {location_id}: {err}")
                     location_data["pending_payments"] = None

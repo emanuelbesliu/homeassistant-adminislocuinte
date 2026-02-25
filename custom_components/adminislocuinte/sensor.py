@@ -339,15 +339,35 @@ class AdminisLocuinteLocationPendingSensor(AdminisLocuinteBaseSensor):
                 pending = location_data["pending_payments"]
                 if pending and pending.get("results"):
                     # Calculate total pending from owner and association
-                    # Currently API returns null for all values
                     results = pending["results"]
                     total = 0.0
+                    
+                    # Parse owner pending amount
                     if results.get("owner"):
-                        # TODO: Parse owner pending when API returns data
-                        pass
+                        owner_data = results["owner"]
+                        if isinstance(owner_data, dict):
+                            # Try different possible keys for pending amount
+                            for key in ["amount", "total", "pending", "value", "suma"]:
+                                if key in owner_data and owner_data[key] is not None:
+                                    try:
+                                        total += float(owner_data[key])
+                                        break
+                                    except (ValueError, TypeError):
+                                        pass
+                    
+                    # Parse association pending amount
                     if results.get("assoc"):
-                        # TODO: Parse association pending when API returns data
-                        pass
+                        assoc_data = results["assoc"]
+                        if isinstance(assoc_data, dict):
+                            # Try different possible keys for pending amount
+                            for key in ["amount", "total", "pending", "value", "suma"]:
+                                if key in assoc_data and assoc_data[key] is not None:
+                                    try:
+                                        total += float(assoc_data[key])
+                                        break
+                                    except (ValueError, TypeError):
+                                        pass
+                    
                     return total
         return 0.0  # Default to 0 when no pending
 
