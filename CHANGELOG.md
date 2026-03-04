@@ -5,6 +5,12 @@ All notable changes to the Adminis Locuințe Home Assistant Integration will be 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.6] - 2026-03-04
+
+### Changed
+- Bump aiohttp from 3.8.0 to 3.9.0 (#3)
+- Dependency updates from Dependabot
+
 ## [1.0.5] - 2024-XX-XX
 
 ### Changed
