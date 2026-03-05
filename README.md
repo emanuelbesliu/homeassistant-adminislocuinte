@@ -1,5 +1,9 @@
 # Adminis Locuințe - Home Assistant Integration
 
+[![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
+[![GitHub Release](https://img.shields.io/github/v/release/emanuelbesliu/homeassistant-adminislocuinte)](https://github.com/emanuelbesliu/homeassistant-adminislocuinte/releases/latest)
+[![License](https://img.shields.io/github/license/emanuelbesliu/homeassistant-adminislocuinte)](LICENSE)
+
 **Integrare custom Home Assistant pentru platforma [adminislocuinte.ro](https://adminislocuinte.ro)**
 
 Monitorizează facturile de utilități, istoricul plăților și sumele restante direct din Home Assistant.
