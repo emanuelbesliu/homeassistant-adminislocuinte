@@ -1,8 +1,7 @@
 {
   "name": "Adminis Locuințe",
   "country": "RO",
-  "domains": ["sensor"],
-  "homeassistant": "2023.1.0",
-  "iot_class": "Cloud Polling",
-  "render_readme": true
+  "content_in_root": false,
+  "render_readme": true,
+  "homeassistant": "2023.1.0"
 }
