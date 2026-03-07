@@ -8,14 +8,23 @@
           "username": "Adresă de e-mail",
           "password": "Parolă"
         }
+      },
+      "reauth_confirm": {
+        "title": "Reautentificare Adminis Locuințe",
+        "description": "Autentificarea pentru contul {username} a eșuat. Te rugăm să introduci parola corectă.",
+        "data": {
+          "password": "Parolă nouă"
+        }
       }
     },
     "error": {
+      "cannot_connect": "Nu s-a putut conecta la Adminis Locuințe",
       "invalid_auth": "Date de autentificare invalide",
       "unknown": "Eroare neașteptată"
     },
     "abort": {
-      "already_configured": "Contul este deja configurat"
+      "already_configured": "Contul este deja configurat",
+      "reauth_successful": "Reautentificare reușită"
     }
   }
 }

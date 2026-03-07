@@ -18,5 +18,5 @@ API_RECEIPT = f"{BASE_URL}/api/receipt/{{location_id}}/"
 API_RECEIPT_MONTH = f"{BASE_URL}/api/receipt/{{location_id}}/{{month}}-{{year}}/"
 API_PAYMENT_INFO = f"{BASE_URL}/api/payment-info/"
 
-# Update interval
-DEFAULT_SCAN_INTERVAL = 3600  # 1 hour in seconds
+# Update interval - 4 times per day (every 6 hours)
+DEFAULT_SCAN_INTERVAL = 21600  # 6 hours in seconds
