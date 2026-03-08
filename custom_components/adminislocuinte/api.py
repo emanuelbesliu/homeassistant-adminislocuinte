@@ -12,9 +12,8 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any
-
 import aiohttp
-from aiohttp import ClientSession
+from aiohttp import ClientSession, CookieJar
 
 from .const import (
     BASE_URL,
@@ -34,67 +33,108 @@ class AuthenticationError(Exception):
 
 
 class AdminisLocuinteAPI:
-    """API client for Adminis Locuințe platform."""
+    """API client for Adminis Locuințe platform.
 
-    def __init__(self, session: ClientSession, username: str, password: str) -> None:
-        """Initialize the API client."""
-        self._session = session
+    Uses a dedicated aiohttp.ClientSession with its own cookie jar so that
+    session cookies (especially the ``adminis`` session ID) are tracked
+    automatically by the jar across requests and redirects.  This avoids
+    the problems caused by manually managing cookies in a dict, where
+    Set-Cookie headers could be absorbed by the session jar without
+    appearing in ``response.cookies``.
+    """
+
+    def __init__(self, username: str, password: str) -> None:
+        """Initialize the API client.
+
+        Call :meth:`async_init` to create the underlying aiohttp session
+        before using any network methods.
+        """
         self._username = username
         self._password = password
-        self._cookies: dict[str, str] = {}
+        self._session: ClientSession | None = None
         self._authenticated = False
         self._location_ids: list[str] = []
-        self._location_info: dict[str, dict[str, str]] = {}  # Store location details
+        self._location_info: dict[str, dict[str, str]] = {}
+
+    async def async_init(self) -> None:
+        """Create the dedicated aiohttp session with its own cookie jar."""
+        jar = CookieJar(unsafe=True)  # unsafe=True allows non-RFC cookies
+        self._session = ClientSession(cookie_jar=jar)
+
+    async def async_close(self) -> None:
+        """Close the dedicated aiohttp session."""
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
+
+    def _clear_cookies(self) -> None:
+        """Clear all cookies from the session jar."""
+        if self._session:
+            self._session.cookie_jar.clear()
+
+    def _has_session_cookie(self) -> bool:
+        """Check whether the session jar contains the 'adminis' cookie."""
+        if not self._session:
+            return False
+        for cookie in self._session.cookie_jar:
+            if cookie.key == "adminis":
+                return True
+        return False
 
     async def authenticate(self) -> bool:
         """Authenticate with the Adminis Locuințe platform.
-        
+
         The authentication flow:
-        1. GET login page to establish session
+        1. GET login page to establish initial session cookies
         2. POST credentials with formSubmitted=1
-        3. Server responds with 302 redirect and sets 'adminis' cookie
-        4. Cookie is used for all subsequent API calls
+        3. Follow redirects so the cookie jar captures the ``adminis``
+           session cookie regardless of which response in the chain sets it
+        4. Verify the ``adminis`` cookie is present in the jar
         """
+        assert self._session is not None, "Call async_init() first"
+
         try:
-            # First, get the login page to establish initial session
+            _LOGGER.debug("Starting Adminis Locuințe authentication")
+
+            # Step 1: GET the login page to seed the cookie jar
             async with self._session.get(LOGIN_URL) as response:
                 if response.status != 200:
                     _LOGGER.error(f"Failed to load login page: {response.status}")
                     raise Exception(f"Failed to load login page: {response.status}")
-                
-                # Store cookies from initial page load
-                self._cookies.update({k: v.value for k, v in response.cookies.items()})
 
-            # Prepare login data - exact format required by the API
+            # Step 2: POST credentials
             login_data = {
                 "email": self._username,
                 "password": self._password,
                 "formSubmitted": "1",
             }
 
-            # Submit login form
             async with self._session.post(
                 LOGIN_URL,
                 data=login_data,
-                cookies=self._cookies,
-                allow_redirects=False,  # Don't follow redirects to capture cookies
+                allow_redirects=True,  # Follow the full redirect chain
             ) as response:
-                # Update cookies after login - the 'adminis' cookie is the session ID
-                self._cookies.update({k: v.value for k, v in response.cookies.items()})
-                
-                # Successful login returns 302 redirect to /i/
-                if response.status == 302:
-                    # Verify we got the session cookie
-                    if 'adminis' in self._cookies:
-                        self._authenticated = True
-                        _LOGGER.info("Successfully authenticated with Adminis Locuințe")
-                        return True
-                    else:
-                        _LOGGER.error("Login returned 302 but no session cookie found")
-                        return False
-                else:
-                    _LOGGER.error(f"Login failed with status: {response.status}")
-                    return False
+                final_url = str(response.url)
+                _LOGGER.debug(
+                    f"Login POST completed: status={response.status}, "
+                    f"final_url={final_url}"
+                )
+
+            # Step 3: Verify we got the session cookie in the jar
+            if self._has_session_cookie():
+                self._authenticated = True
+                _LOGGER.info("Successfully authenticated with Adminis Locuințe")
+                return True
+
+            # The cookie jar didn't capture 'adminis'.  Log what we do
+            # have for debugging.
+            jar_cookies = {c.key: c.value[:8] + "..." for c in self._session.cookie_jar}
+            _LOGGER.error(
+                "Authentication completed but 'adminis' session cookie not found "
+                "in cookie jar. Cookies present: %s",
+                list(jar_cookies.keys()),
+            )
+            return False
 
         except Exception as err:
             _LOGGER.error(f"Authentication error: {err}")
@@ -102,62 +142,57 @@ class AdminisLocuinteAPI:
 
     async def _extract_location_ids(self) -> list[str]:
         """Extract location IDs and details from the dashboard HTML.
-        
+
         Location IDs are embedded in <option value="ID" data-code="CODE"> elements.
         We need the value attribute (actual location ID), not the data-code.
         Also extracts location names and addresses.
-        
+
         Raises:
             AuthenticationError: If the session has expired (redirected to login page).
         """
+        assert self._session is not None
+
         try:
-            async with self._session.get(
-                DASHBOARD_URL,
-                cookies=self._cookies,
-            ) as response:
+            async with self._session.get(DASHBOARD_URL) as response:
                 if response.status in (401, 403):
                     raise AuthenticationError(
                         f"Session expired loading dashboard: {response.status}"
                     )
                 if response.status == 200:
                     html = await response.text()
-                    
+
                     # Detect redirect-to-login: server returns 200 with login
                     # page HTML instead of the dashboard
                     if "autentificare" in html.lower() and '<option' not in html:
                         raise AuthenticationError(
                             "Session expired: dashboard returned login page"
                         )
-                    
+
                     # Extract location IDs from <option value="ID" data-code="CODE">Location Name</option>
-                    # Pattern: <option value="16835" data-code="345764">Location Name</option>
                     pattern = r'<option\s+value="(\d+)"\s+data-code="(\d+)"[^>]*>([^<]+)</option>'
                     matches = re.findall(pattern, html)
-                    
+
                     location_ids = []
                     for loc_id, code, loc_name in matches:
                         if loc_id not in location_ids:
                             location_ids.append(loc_id)
-                            # Parse location name to extract details
-                            # Format: "Str. Exemplu nr. 1, bloc A1, scara A, ap. 12, Iasi, Iasi"
                             self._location_info[loc_id] = {
                                 "name": loc_name.strip(),
                                 "id": loc_id,
-                                "code": code  # Store the code as well for reference
+                                "code": code,
                             }
-                            
+
                             # Try to extract apartment/parking number
                             if ", ap. " in loc_name:
                                 apt = loc_name.split(", ap. ")[1].split(",")[0]
                                 self._location_info[loc_id]["apartment"] = apt
-                                # Determine type
                                 if "PARCARI" in loc_name or apt.startswith("S"):
                                     self._location_info[loc_id]["type"] = "parking"
                                 else:
                                     self._location_info[loc_id]["type"] = "apartment"
                             else:
                                 self._location_info[loc_id]["type"] = "unknown"
-                    
+
                     # Extract association ID
                     assoc_match = re.search(r'data-assoc="(\d+)"', html)
                     if assoc_match:
@@ -165,7 +200,7 @@ class AdminisLocuinteAPI:
                         _LOGGER.debug(f"Found association ID: {assoc_id}")
                         for loc_id in location_ids:
                             self._location_info[loc_id]["association_id"] = assoc_id
-                    
+
                     _LOGGER.debug(f"Found {len(location_ids)} location(s): {location_ids}")
                     _LOGGER.debug(f"Location info: {self._location_info}")
                     return location_ids
@@ -179,7 +214,7 @@ class AdminisLocuinteAPI:
 
     async def get_data(self) -> dict[str, Any]:
         """Fetch consumption and billing data from all locations.
-        
+
         Returns data structure:
         {
             "locations": {
@@ -201,13 +236,11 @@ class AdminisLocuinteAPI:
         # Always re-authenticate before fetching data.
         # Cookies expire between 6-hour refresh cycles, so a fresh login
         # on every call is the only reliable approach.
-        self._cookies.clear()
+        self._clear_cookies()
         self._authenticated = False
         await self.authenticate()
 
         # Re-extract location IDs with fresh cookies every time.
-        # The IDs themselves don't change, but the dashboard fetch
-        # requires valid cookies.
         self._location_ids = await self._extract_location_ids()
         if not self._location_ids:
             _LOGGER.warning("No location IDs found")
@@ -221,44 +254,32 @@ class AdminisLocuinteAPI:
 
             for location_id in self._location_ids:
                 location_data = {}
-                
+
                 # Add location info (name, address, type)
                 if location_id in self._location_info:
                     location_data["info"] = self._location_info[location_id]
-                
-                # Receipt API currently returns 403 Forbidden - skipping
-                # Payment history provides the same data with better reliability
-                # Uncomment when receipt API access is resolved
-                # try:
-                #     current_receipt = await self._fetch_receipt(location_id)
-                #     location_data["current_receipt"] = current_receipt
-                # except Exception as err:
-                #     _LOGGER.debug(f"Error fetching current receipt for {location_id}: {err}")
-                #     location_data["current_receipt"] = None
-                
+
                 # Fetch pending payments for this location
                 try:
                     pending_payments = await self._fetch_pending_payments(location_id)
                     location_data["pending_payments"] = pending_payments
-                    
+
                     # Extract pending amount if available
                     if pending_payments and pending_payments.get("results"):
                         results = pending_payments["results"]
                         location_pending = 0.0
-                        
-                        # The pending amount is in results.totalsNoviprop field
+
                         if results.get("totalsNoviprop"):
                             try:
                                 location_pending = float(results["totalsNoviprop"])
                                 _LOGGER.debug(f"Location {location_id} pending from totalsNoviprop: {location_pending} RON")
                             except (ValueError, TypeError) as e:
                                 _LOGGER.warning(f"Failed to parse totalsNoviprop for location {location_id}: {e}")
-                        
-                        # Add to total if we found any pending amount
+
                         if location_pending > 0:
                             total_pending += location_pending
                             _LOGGER.info(f"Location {location_id} has pending: {location_pending} RON")
-                        
+
                 except AuthenticationError:
                     raise
                 except Exception as err:
@@ -269,15 +290,14 @@ class AdminisLocuinteAPI:
                 try:
                     payment_history = await self._fetch_payment_history(location_id)
                     location_data["payment_history"] = payment_history
-                    
-                    # Extract last payment info for summary
+
                     if payment_history.get("results") and len(payment_history["results"]) > 0:
                         latest = payment_history["results"][0]
                         if not last_payment:
                             last_payment = {
                                 "amount": float(latest.get("amount", 0)),
                                 "date": latest.get("date", ""),
-                                "location_id": location_id
+                                "location_id": location_id,
                             }
                 except AuthenticationError:
                     raise
@@ -301,11 +321,11 @@ class AdminisLocuinteAPI:
                 locations_data[location_id] = location_data
 
             # Build summary
-            summary = {
+            summary: dict[str, Any] = {
                 "total_pending": total_pending,
                 "location_count": len(self._location_ids),
             }
-            
+
             if last_payment:
                 summary["last_payment_amount"] = last_payment["amount"]
                 summary["last_payment_date"] = last_payment["date"]
@@ -320,17 +340,20 @@ class AdminisLocuinteAPI:
             _LOGGER.error(f"Error fetching data: {err}")
             raise
 
+    # ------------------------------------------------------------------
+    # Private fetch helpers
+    # ------------------------------------------------------------------
+
     async def _fetch_pending_payments(self, location_id: str) -> dict[str, Any]:
         """Fetch pending payments for a specific location."""
+        assert self._session is not None
         url = API_PENDING_PAYMENTS.format(location_id=location_id)
-        async with self._session.get(url, cookies=self._cookies) as response:
+        async with self._session.get(url) as response:
             if response.status in (401, 403):
                 raise AuthenticationError(
                     f"Session expired fetching pending payments: {response.status}"
                 )
             if response.status == 200:
-                # Detect redirect-to-login: server follows redirect, returns 200
-                # with HTML instead of JSON
                 content_type = response.headers.get("Content-Type", "")
                 if "text/html" in content_type:
                     raise AuthenticationError(
@@ -341,26 +364,19 @@ class AdminisLocuinteAPI:
 
     async def _fetch_receipt(self, location_id: str, month: int | None = None, year: int | None = None) -> dict[str, Any]:
         """Fetch receipt for a specific location and month.
-        
+
         NOTE: This API currently returns 403 Forbidden. Disabled in get_data().
         Payment history API provides the same data with better reliability.
-        
-        Args:
-            location_id: Location ID
-            month: Month number (1-12). If None, fetches current month.
-            year: Year (YYYY). If None, fetches current year.
-            
-        Returns:
-            Receipt data with detailed breakdown of charges.
         """
+        assert self._session is not None
         from .const import API_RECEIPT, API_RECEIPT_MONTH
-        
+
         if month and year:
             url = API_RECEIPT_MONTH.format(location_id=location_id, month=month, year=year)
         else:
             url = API_RECEIPT.format(location_id=location_id)
-        
-        async with self._session.get(url, cookies=self._cookies) as response:
+
+        async with self._session.get(url) as response:
             if response.status in (401, 403):
                 raise AuthenticationError(
                     f"Session expired fetching receipt: {response.status}"
@@ -375,12 +391,10 @@ class AdminisLocuinteAPI:
             raise Exception(f"Failed to fetch receipt: {response.status}")
 
     async def _fetch_payment_history(self, location_id: str) -> dict[str, Any]:
-        """Fetch payment history for a specific location.
-        
-        Returns detailed payment history with breakdown of all charges.
-        """
+        """Fetch payment history for a specific location."""
+        assert self._session is not None
         url = API_PAYMENTS_HISTORY.format(location_id=location_id)
-        async with self._session.get(url, cookies=self._cookies) as response:
+        async with self._session.get(url) as response:
             if response.status in (401, 403):
                 raise AuthenticationError(
                     f"Session expired fetching payment history: {response.status}"
@@ -396,8 +410,9 @@ class AdminisLocuinteAPI:
 
     async def _fetch_counters(self, location_id: str) -> dict[str, Any]:
         """Fetch counter readings for a specific location."""
+        assert self._session is not None
         url = API_COUNTERS.format(location_id=location_id)
-        async with self._session.get(url, cookies=self._cookies) as response:
+        async with self._session.get(url) as response:
             if response.status in (401, 403):
                 raise AuthenticationError(
                     f"Session expired fetching counters: {response.status}"
@@ -411,9 +426,13 @@ class AdminisLocuinteAPI:
                 return await response.json()
             raise Exception(f"Failed to fetch counters: {response.status}")
 
+    # ------------------------------------------------------------------
+    # Public convenience methods
+    # ------------------------------------------------------------------
+
     async def get_monthly_consumption(self, year: int, month: int) -> dict[str, Any]:
         """Get consumption data for a specific month.
-        
+
         Note: Receipt API currently returns 403. This may require:
         - Active billing data for the specified month
         - Different authentication or permissions
@@ -429,47 +448,37 @@ class AdminisLocuinteAPI:
         return data.get("summary", {})
 
     async def get_payment_history(self, location_id: str | None = None) -> list[dict[str, Any]]:
-        """Get payment history for all locations or a specific location.
-        
-        Args:
-            location_id: Optional location ID. If None, returns history for all locations.
-            
-        Returns:
-            List of payment records with details.
-        """
+        """Get payment history for all locations or a specific location."""
         # Re-authenticate with fresh cookies
-        self._cookies.clear()
+        self._clear_cookies()
         self._authenticated = False
         await self.authenticate()
-        
+
         if not self._location_ids:
             self._location_ids = await self._extract_location_ids()
-        
-        all_payments = []
+
+        all_payments: list[dict[str, Any]] = []
         location_ids = [location_id] if location_id else self._location_ids
-        
+
         for loc_id in location_ids:
             try:
                 history = await self._fetch_payment_history(loc_id)
                 if history.get("results"):
-                    # Add location_id to each payment for identification
                     for payment in history["results"]:
                         payment["location_id"] = loc_id
                         all_payments.append(payment)
             except Exception as err:
                 _LOGGER.error(f"Error fetching payment history for {loc_id}: {err}")
-        
-        # Sort by date (most recent first)
+
         all_payments.sort(key=lambda x: x.get("date", ""), reverse=True)
         return all_payments
 
     async def get_locations(self) -> list[str]:
         """Get list of location IDs for this account."""
         # Re-authenticate with fresh cookies
-        self._cookies.clear()
+        self._clear_cookies()
         self._authenticated = False
         await self.authenticate()
-        
+
         self._location_ids = await self._extract_location_ids()
-        
         return self._location_ids
