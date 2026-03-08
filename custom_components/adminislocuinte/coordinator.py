@@ -27,7 +27,7 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 
-from .api import AdminisLocuinteAPI
+from .api import AdminisLocuinteAPI, AuthenticationError
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -158,12 +158,17 @@ class AdminisLocuinteDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]
         """Determine whether an exception indicates an authentication problem.
 
         Checks for:
+        - Our own AuthenticationError from the API client
         - HTTP 401 / 403 status codes in the message
         - Explicit "login" / "authentication" phrases
         - Cookie-based session expiry indicators (redirect to login page)
         - aiohttp ClientResponseError with matching status
         """
         import aiohttp
+
+        # Our API client raises AuthenticationError on 401/403 / login redirect
+        if isinstance(err, AuthenticationError):
+            return True
 
         # aiohttp gives us a typed status code
         if isinstance(err, aiohttp.ClientResponseError):
