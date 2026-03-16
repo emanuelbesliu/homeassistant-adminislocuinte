@@ -217,6 +217,12 @@ Mulțumesc comunității Home Assistant pentru documentație și suport!
 
 ---
 
+## ☕ Support the Developer
+
+If you find this project useful, consider buying me a coffee!
+
+[!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/emanuelbesliu)
+
+---
+
 **Dezvoltat cu ❤️ de Emanuel Besliu**
-# Test dependency update
-# Test v2
