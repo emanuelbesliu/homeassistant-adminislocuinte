@@ -16,7 +16,7 @@ from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 
-from .api import AdminisLocuinteAPI
+from .api import AdminisLocuinteAPI, AuthenticationError
 from .const import DOMAIN
 from .coordinator import AdminisLocuinteDataUpdateCoordinator
 
@@ -42,8 +42,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             raise ConfigEntryAuthFailed(
                 "Authentication failed. Please reconfigure with valid credentials."
             )
-    except ConfigEntryAuthFailed:
-        raise
+    except (ConfigEntryAuthFailed, AuthenticationError) as err:
+        await api.async_close()
+        raise ConfigEntryAuthFailed(
+            "Authentication failed. Please reconfigure with valid credentials."
+        ) from err
     except Exception as err:
         await api.async_close()
         _LOGGER.error("Failed to authenticate with Adminis Locuințe: %s", err)

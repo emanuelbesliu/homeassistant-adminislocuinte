@@ -81,28 +81,79 @@ class AdminisLocuinteAPI:
                 return True
         return False
 
+    def _get_session_cookie_value(self) -> str | None:
+        """Return the current value of the 'adminis' session cookie."""
+        if not self._session:
+            return None
+        for cookie in self._session.cookie_jar:
+            if cookie.key == "adminis":
+                return cookie.value
+        return None
+
+    @property
+    def _browser_headers(self) -> dict[str, str]:
+        """Return browser-like headers to avoid Cloudflare/WAF blocks."""
+        return {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            ),
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "ro-RO,ro;q=0.9,en;q=0.8",
+            "Referer": DASHBOARD_URL,
+            "X-Requested-With": "XMLHttpRequest",
+        }
+
     async def authenticate(self) -> bool:
         """Authenticate with the Adminis Locuințe platform.
 
         The authentication flow:
         1. GET login page to establish initial session cookies
-        2. POST credentials with formSubmitted=1
-        3. Follow redirects so the cookie jar captures the ``adminis``
+        2. Record the pre-login session cookie value
+        3. POST credentials with formSubmitted=1
+        4. Follow redirects so the cookie jar captures the new ``adminis``
            session cookie regardless of which response in the chain sets it
-        4. Verify the ``adminis`` cookie is present in the jar
+        5. Verify authentication succeeded by checking:
+           a. The ``adminis`` cookie value changed (new authenticated session)
+           b. OR the final URL is the dashboard (redirect after login)
+           c. AND the response body does not contain login error messages
         """
         assert self._session is not None, "Call async_init() first"
+
+        # Browser-like headers to avoid Cloudflare blocks
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            ),
+            "Accept": (
+                "text/html,application/xhtml+xml,application/xml;"
+                "q=0.9,image/webp,*/*;q=0.8"
+            ),
+            "Accept-Language": "ro-RO,ro;q=0.9,en;q=0.8",
+            "Referer": LOGIN_URL,
+            "Origin": BASE_URL,
+        }
 
         try:
             _LOGGER.debug("Starting Adminis Locuințe authentication")
 
             # Step 1: GET the login page to seed the cookie jar
-            async with self._session.get(LOGIN_URL) as response:
+            async with self._session.get(LOGIN_URL, headers=headers) as response:
                 if response.status != 200:
                     _LOGGER.error(f"Failed to load login page: {response.status}")
                     raise Exception(f"Failed to load login page: {response.status}")
 
-            # Step 2: POST credentials
+            # Step 2: Record pre-login cookie value
+            pre_login_cookie = self._get_session_cookie_value()
+            _LOGGER.debug(
+                "Pre-login session cookie: %s",
+                pre_login_cookie[:8] + "..." if pre_login_cookie else "None",
+            )
+
+            # Step 3: POST credentials
             login_data = {
                 "email": self._username,
                 "password": self._password,
@@ -112,30 +163,90 @@ class AdminisLocuinteAPI:
             async with self._session.post(
                 LOGIN_URL,
                 data=login_data,
+                headers=headers,
                 allow_redirects=True,  # Follow the full redirect chain
             ) as response:
                 final_url = str(response.url)
+                response_text = await response.text()
                 _LOGGER.debug(
                     f"Login POST completed: status={response.status}, "
                     f"final_url={final_url}"
                 )
 
-            # Step 3: Verify we got the session cookie in the jar
-            if self._has_session_cookie():
+            # Step 4: Verify authentication actually succeeded
+            post_login_cookie = self._get_session_cookie_value()
+            _LOGGER.debug(
+                "Post-login session cookie: %s",
+                post_login_cookie[:8] + "..." if post_login_cookie else "None",
+            )
+
+            # Check for login error messages in the response HTML
+            error_indicators = [
+                "notification-error",
+                "Completarea adresei de e-mail",
+                "parolei sunt obligatorii",
+                "Adresa de e-mail sau parola sunt incorecte",
+                "autentificare eșuată",
+            ]
+            response_lower = response_text.lower()
+            for indicator in error_indicators:
+                if indicator.lower() in response_lower:
+                    _LOGGER.error(
+                        "Authentication failed - login page returned error: "
+                        "found '%s' in response",
+                        indicator,
+                    )
+                    raise AuthenticationError(
+                        f"Login failed: server returned error page "
+                        f"(detected '{indicator}')"
+                    )
+
+            # Verify the session cookie changed (indicates server created
+            # a new authenticated session) OR we were redirected to dashboard
+            dashboard_redirect = "/i/" in final_url and "autentificare" not in final_url
+            cookie_changed = (
+                post_login_cookie
+                and pre_login_cookie
+                and post_login_cookie != pre_login_cookie
+            )
+
+            if dashboard_redirect or cookie_changed:
                 self._authenticated = True
-                _LOGGER.info("Successfully authenticated with Adminis Locuințe")
+                _LOGGER.info(
+                    "Successfully authenticated with Adminis Locuințe "
+                    "(redirect=%s, cookie_changed=%s)",
+                    dashboard_redirect,
+                    cookie_changed,
+                )
                 return True
 
-            # The cookie jar didn't capture 'adminis'.  Log what we do
-            # have for debugging.
+            # Fallback: cookie exists and we're not on the login page
+            if self._has_session_cookie() and "autentificare" not in final_url:
+                self._authenticated = True
+                _LOGGER.info(
+                    "Successfully authenticated with Adminis Locuințe "
+                    "(fallback: cookie present, not on login page)"
+                )
+                return True
+
+            # Authentication failed
             jar_cookies = {c.key: c.value[:8] + "..." for c in self._session.cookie_jar}
             _LOGGER.error(
-                "Authentication completed but 'adminis' session cookie not found "
-                "in cookie jar. Cookies present: %s",
+                "Authentication failed. Cookie changed: %s, "
+                "dashboard redirect: %s, final_url: %s, "
+                "cookies present: %s",
+                cookie_changed,
+                dashboard_redirect,
+                final_url,
                 list(jar_cookies.keys()),
             )
-            return False
+            raise AuthenticationError(
+                f"Login failed: no redirect to dashboard and session cookie "
+                f"did not change. Final URL: {final_url}"
+            )
 
+        except AuthenticationError:
+            raise
         except Exception as err:
             _LOGGER.error(f"Authentication error: {err}")
             raise
@@ -153,7 +264,7 @@ class AdminisLocuinteAPI:
         assert self._session is not None
 
         try:
-            async with self._session.get(DASHBOARD_URL) as response:
+            async with self._session.get(DASHBOARD_URL, headers=self._browser_headers) as response:
                 if response.status in (401, 403):
                     raise AuthenticationError(
                         f"Session expired loading dashboard: {response.status}"
@@ -250,7 +361,9 @@ class AdminisLocuinteAPI:
             # Collect data from all locations
             locations_data = {}
             total_pending = 0.0
+            pending_data_available = False
             last_payment = None
+            payment_data_available = False
 
             for location_id in self._location_ids:
                 location_data = {}
@@ -263,6 +376,7 @@ class AdminisLocuinteAPI:
                 try:
                     pending_payments = await self._fetch_pending_payments(location_id)
                     location_data["pending_payments"] = pending_payments
+                    pending_data_available = True
 
                     # Extract pending amount if available
                     if pending_payments and pending_payments.get("results"):
@@ -290,6 +404,7 @@ class AdminisLocuinteAPI:
                 try:
                     payment_history = await self._fetch_payment_history(location_id)
                     location_data["payment_history"] = payment_history
+                    payment_data_available = True
 
                     if payment_history.get("results") and len(payment_history["results"]) > 0:
                         latest = payment_history["results"][0]
@@ -321,8 +436,10 @@ class AdminisLocuinteAPI:
                 locations_data[location_id] = location_data
 
             # Build summary
+            # If no pending data was fetched at all (all locations failed),
+            # set total_pending to None so the global sensor shows unavailable
             summary: dict[str, Any] = {
-                "total_pending": total_pending,
+                "total_pending": total_pending if pending_data_available else None,
                 "location_count": len(self._location_ids),
             }
 
@@ -344,23 +461,71 @@ class AdminisLocuinteAPI:
     # Private fetch helpers
     # ------------------------------------------------------------------
 
+    async def _check_api_response(
+        self, response: aiohttp.ClientResponse, endpoint_name: str
+    ) -> dict[str, Any]:
+        """Validate an API response and return the parsed JSON.
+
+        Distinguishes between:
+        - **Server-side API errors** (403 with JSON body like
+          ``{"error":1,"message":"Eroare comunicare server."}``) which are
+          transient backend problems — NOT authentication failures.
+        - **Session expiry** (401/403 with HTML body or redirect to login)
+          which indicates the session cookie is no longer valid.
+
+        Raises:
+            AuthenticationError: If the session has expired (HTML redirect
+                to login page or 401 without a JSON body).
+            Exception: For server-side API errors (503-like conditions
+                returned as 403 by the Adminis backend) or other HTTP errors.
+        """
+        content_type = response.headers.get("Content-Type", "")
+
+        if response.status in (401, 403):
+            # Try to read the body to distinguish auth failure from API error
+            if "application/json" in content_type:
+                try:
+                    data = await response.json()
+                    # Server-side error: the API authenticated us fine but
+                    # its backend failed (e.g., database/billing system down).
+                    # This is NOT an authentication error — don't trigger reauth.
+                    error_msg = data.get("message", "Unknown server error")
+                    _LOGGER.warning(
+                        "Server-side API error fetching %s (HTTP %d): %s",
+                        endpoint_name,
+                        response.status,
+                        error_msg,
+                    )
+                    raise Exception(
+                        f"Server error fetching {endpoint_name}: "
+                        f"{error_msg} (HTTP {response.status})"
+                    )
+                except (ValueError, KeyError):
+                    pass  # Not valid JSON — fall through to auth error
+
+            # Non-JSON 401/403 = genuine session expiry
+            raise AuthenticationError(
+                f"Session expired fetching {endpoint_name}: {response.status}"
+            )
+
+        if response.status == 200:
+            if "text/html" in content_type:
+                raise AuthenticationError(
+                    f"Session expired: {endpoint_name} returned HTML "
+                    f"(login redirect)"
+                )
+            return await response.json()
+
+        raise Exception(
+            f"Failed to fetch {endpoint_name}: HTTP {response.status}"
+        )
+
     async def _fetch_pending_payments(self, location_id: str) -> dict[str, Any]:
         """Fetch pending payments for a specific location."""
         assert self._session is not None
         url = API_PENDING_PAYMENTS.format(location_id=location_id)
-        async with self._session.get(url) as response:
-            if response.status in (401, 403):
-                raise AuthenticationError(
-                    f"Session expired fetching pending payments: {response.status}"
-                )
-            if response.status == 200:
-                content_type = response.headers.get("Content-Type", "")
-                if "text/html" in content_type:
-                    raise AuthenticationError(
-                        "Session expired: pending payments returned HTML (login redirect)"
-                    )
-                return await response.json()
-            raise Exception(f"Failed to fetch pending payments: {response.status}")
+        async with self._session.get(url, headers=self._browser_headers) as response:
+            return await self._check_api_response(response, "pending payments")
 
     async def _fetch_receipt(self, location_id: str, month: int | None = None, year: int | None = None) -> dict[str, Any]:
         """Fetch receipt for a specific location and month.
@@ -376,55 +541,22 @@ class AdminisLocuinteAPI:
         else:
             url = API_RECEIPT.format(location_id=location_id)
 
-        async with self._session.get(url) as response:
-            if response.status in (401, 403):
-                raise AuthenticationError(
-                    f"Session expired fetching receipt: {response.status}"
-                )
-            if response.status == 200:
-                content_type = response.headers.get("Content-Type", "")
-                if "text/html" in content_type:
-                    raise AuthenticationError(
-                        "Session expired: receipt returned HTML (login redirect)"
-                    )
-                return await response.json()
-            raise Exception(f"Failed to fetch receipt: {response.status}")
+        async with self._session.get(url, headers=self._browser_headers) as response:
+            return await self._check_api_response(response, "receipt")
 
     async def _fetch_payment_history(self, location_id: str) -> dict[str, Any]:
         """Fetch payment history for a specific location."""
         assert self._session is not None
         url = API_PAYMENTS_HISTORY.format(location_id=location_id)
-        async with self._session.get(url) as response:
-            if response.status in (401, 403):
-                raise AuthenticationError(
-                    f"Session expired fetching payment history: {response.status}"
-                )
-            if response.status == 200:
-                content_type = response.headers.get("Content-Type", "")
-                if "text/html" in content_type:
-                    raise AuthenticationError(
-                        "Session expired: payment history returned HTML (login redirect)"
-                    )
-                return await response.json()
-            raise Exception(f"Failed to fetch payment history: {response.status}")
+        async with self._session.get(url, headers=self._browser_headers) as response:
+            return await self._check_api_response(response, "payment history")
 
     async def _fetch_counters(self, location_id: str) -> dict[str, Any]:
         """Fetch counter readings for a specific location."""
         assert self._session is not None
         url = API_COUNTERS.format(location_id=location_id)
-        async with self._session.get(url) as response:
-            if response.status in (401, 403):
-                raise AuthenticationError(
-                    f"Session expired fetching counters: {response.status}"
-                )
-            if response.status == 200:
-                content_type = response.headers.get("Content-Type", "")
-                if "text/html" in content_type:
-                    raise AuthenticationError(
-                        "Session expired: counters returned HTML (login redirect)"
-                    )
-                return await response.json()
-            raise Exception(f"Failed to fetch counters: {response.status}")
+        async with self._session.get(url, headers=self._browser_headers) as response:
+            return await self._check_api_response(response, "counters")
 
     # ------------------------------------------------------------------
     # Public convenience methods

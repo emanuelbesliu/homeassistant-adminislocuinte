@@ -159,14 +159,18 @@ class AdminisLocuinteDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]
 
         Checks for:
         - Our own AuthenticationError from the API client
-        - HTTP 401 / 403 status codes in the message
-        - Explicit "login" / "authentication" phrases
-        - Cookie-based session expiry indicators (redirect to login page)
-        - aiohttp ClientResponseError with matching status
+        - aiohttp ClientResponseError with 401/403 status
+        - Explicit authentication-related phrases in the error message
+
+        Does NOT treat server-side API errors as auth errors.  The API
+        client raises a plain ``Exception`` (not ``AuthenticationError``)
+        when the Adminis backend returns a JSON error body with HTTP 403
+        (e.g. ``"Eroare comunicare server."``).  Those are transient
+        backend problems and must be retried, not trigger a reauth flow.
         """
         import aiohttp
 
-        # Our API client raises AuthenticationError on 401/403 / login redirect
+        # Our API client raises AuthenticationError on genuine session expiry
         if isinstance(err, AuthenticationError):
             return True
 
@@ -175,16 +179,27 @@ class AdminisLocuinteDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]
             if err.status in (401, 403):
                 return True
 
-        # Fall back to inspecting the string representation
+        # Fall back to inspecting the string representation — but be
+        # careful NOT to match server-side API errors that happen to
+        # mention HTTP status codes in their text.
         err_str = str(err).lower()
+
+        # Skip string-matching for known server-side errors
+        server_error_markers = (
+            "server error fetching",
+            "eroare comunicare server",
+        )
+        if any(marker in err_str for marker in server_error_markers):
+            return False
+
         auth_keywords = (
-            "401",
-            "403",
             "unauthorized",
             "forbidden",
             "authentication failed",
             "invalid credentials",
             "login failed",
+            "login page",
+            "session expired",
             "autentificare",
             "no session cookie",
         )

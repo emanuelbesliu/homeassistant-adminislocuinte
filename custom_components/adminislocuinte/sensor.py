@@ -260,11 +260,19 @@ class AdminisLocuinteLocationMonthlyBillSensor(AdminisLocuinteBaseSensor):
 
     @property
     def native_value(self) -> float | None:
-        """Return the state of the sensor (current month's total)."""
+        """Return the state of the sensor (current month's total).
+
+        Returns None (unavailable) when the data could not be fetched
+        (e.g. server-side API error).  Returns 0.0 only when the API
+        confirms there is nothing pending.
+        """
         if self.coordinator.data and "locations" in self.coordinator.data:
             location_data = self.coordinator.data["locations"].get(self._location_id)
-            if location_data and "pending_payments" in location_data:
-                pending = location_data["pending_payments"]
+            if location_data:
+                pending = location_data.get("pending_payments")
+                # None means the fetch failed (server error) — sensor unavailable
+                if pending is None:
+                    return None
                 if pending and pending.get("results"):
                     results = pending["results"]
                     # Use totalsNoviprop for the current pending amount
@@ -273,7 +281,9 @@ class AdminisLocuinteLocationMonthlyBillSensor(AdminisLocuinteBaseSensor):
                             return float(results["totalsNoviprop"])
                         except (ValueError, TypeError):
                             pass
-        return 0.0
+                    # API responded successfully but no pending amount
+                    return 0.0
+        return None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -395,11 +405,19 @@ class AdminisLocuinteLocationPendingSensor(AdminisLocuinteBaseSensor):
 
     @property
     def native_value(self) -> float | None:
-        """Return the state of the sensor."""
+        """Return the state of the sensor.
+
+        Returns None (unavailable) when the data could not be fetched
+        (e.g. server-side API error).  Returns 0.0 only when the API
+        confirms there is nothing pending.
+        """
         if self.coordinator.data and "locations" in self.coordinator.data:
             location_data = self.coordinator.data["locations"].get(self._location_id)
-            if location_data and "pending_payments" in location_data:
-                pending = location_data["pending_payments"]
+            if location_data:
+                pending = location_data.get("pending_payments")
+                # None means the fetch failed (server error) — sensor unavailable
+                if pending is None:
+                    return None
                 if pending and pending.get("results"):
                     # Calculate total pending from totalsNoviprop field
                     results = pending["results"]
@@ -413,7 +431,9 @@ class AdminisLocuinteLocationPendingSensor(AdminisLocuinteBaseSensor):
                             pass
                     
                     return total
-        return 0.0  # Default to 0 when no pending
+                # API responded successfully but no results
+                return 0.0
+        return None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -537,11 +557,18 @@ class AdminisLocuinteLocationLastPaymentSensor(AdminisLocuinteBaseSensor):
 
     @property
     def native_value(self) -> float | None:
-        """Return the state of the sensor."""
+        """Return the state of the sensor.
+
+        Returns None (unavailable) when the data could not be fetched
+        (e.g. server-side API error).
+        """
         if self.coordinator.data and "locations" in self.coordinator.data:
             location_data = self.coordinator.data["locations"].get(self._location_id)
-            if location_data and "payment_history" in location_data:
-                history = location_data["payment_history"]
+            if location_data:
+                history = location_data.get("payment_history")
+                # None means the fetch failed (server error) — sensor unavailable
+                if history is None:
+                    return None
                 if history and history.get("results") and len(history["results"]) > 0:
                     latest = history["results"][0]
                     amount_str = latest.get("amount", "0")
